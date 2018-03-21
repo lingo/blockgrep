@@ -30,12 +30,15 @@ my %options=(
     # 'invert-match' => 0,
 	'print-block-end-indent' => 0,
     'print-block-end-regex'  => 1,
+    'print-block-end-eof'  => 1,
     'print-block-start'      => 1,
+	'debug' => 0,
 	'block-end-regex' => q[^\s*(done\b|end\b|\})],
 );
 GetOptions(\%options,
     # 'help|h',
     'ignore-case|i!',
+	'debug!',
     's' => sub { $options{'ignore-case'} = 0; },
     # 'invert-match|v!',
     'separator|p:s',
@@ -43,7 +46,7 @@ GetOptions(\%options,
     'print-block-end-indent|I!',
     'print-block-start|m!',
     'M' => sub { $options{'print-block-start'} = 0; },
-    'block-line-filter:s'
+    'block-line-filter|filter|f:s',
 ) or croak $!;
 
 # if ($options{help}) {
@@ -66,9 +69,11 @@ if ($options{'ignore-case'}) {
 
 shift @ARGV;
 
-# print "# Seek $pattern\n";
-# print '# ' . Dumper(\%options);
-# print '# ' . Dumper(\@ARGV);
+if ($options{debug}) {
+	print "# Seek $pattern\n";
+	print "# Options: \n" . Dumper(\%options);
+	print "# ARGV:\n" . Dumper(\@ARGV);
+}
 
 sub detect_indent {
 	my $str = shift @_;
@@ -85,13 +90,13 @@ sub detect_indent {
 		#print "# only spaces\n";
 		$count =()= $indentStr =~ /[ ]/g;
 	} else { # Mixed
-		#print "# mixed indent\n";
+		print "# mixed indent\n" if $options{debug};
 		my $tabCount =()= $indentStr =~ /\t+/g;
 		my $spaceCount =()= $indentStr =~ /[ ]+/g;
 		return $tabCount || $spaceCount;
 	}
 	#print "# Indent String is |$indentStr|\n";
-	#print "# count is |$count|\n";
+	#print "# count is |$count|\n" if $options{debug};
 	return $count;
 }
 
@@ -127,13 +132,13 @@ while(<>) {
 			}
 			$indent = detect_indent($line);
             if ($line =~ $options{'block-end-regex'}) {
-                #print "# Endblock symbol found \n";
+                print "# Endblock symbol found \n" . $line . "\n" if $options{debug};
                 $mode = MODE_MATCH_PATTERN;
                 end_block($block, $line, 'regex');
                 $block = '';
                 next;
             } elsif ($indent != $matchIndent) {
-				#print "# Indent not match\n";
+				print "# Indent not match\n" . $line . "\n" if $options{debug};
 				$mode = MODE_MATCH_PATTERN;
                 end_block($block, $line, 'indent');
                 $block = '';
@@ -153,6 +158,8 @@ while(<>) {
 		}
 	}
 }
+end_block($block, '', 'eof');
+
 
 
 #print "# EOF\n";
