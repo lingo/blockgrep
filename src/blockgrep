@@ -90,10 +90,14 @@ if ($options{debug}) {
 sub detect_indent {
 	my $str = shift @_;
     unless($str) {
-        return 0;
+        return 0, '';
     }
 	my $count = 0;
 	my $indentStr = $str =~ s/^(\s+).*/$1/r;
+
+	unless($indentStr =~ /^\s+$/) {
+		return 0, '';
+	}
 
 	if ($indentStr =~ /^\t+$/) { # Tabs
 		#print "# only tabs\n";
@@ -102,7 +106,7 @@ sub detect_indent {
 		#print "# only spaces\n";
 		$count =()= $indentStr =~ /[ ]/g;
 	} else { # Mixed
-		print "# mixed indent\n" if $options{debug};
+		print "# mixed indent: |$indentStr|\n" if $options{debug};
 		my $tabCount =()= $indentStr =~ /\t+/g;
 		my $spaceCount =()= $indentStr =~ /[ ]+/g;
 		return ($tabCount || $spaceCount, $indentStr);
