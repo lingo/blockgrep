@@ -55,6 +55,7 @@ GetOptions(\%options,
     'print-block-end-indent|endindent|I!',
     'print-block-start|start|m!',
 	'block-end-regex|regex|e:s',
+
     'M' => sub { $options{'print-block-start'} = 0; },
     'block-head-lines|head:n',
     'block-tail-lines|tail:n',
@@ -223,6 +224,7 @@ Greps FILES or STIND for PATTERN, outputting blocks.
     -I|--print-block-end-indent    Print line that ends block by indent change
     -R|--print-block-end-regex     [*] Print line that ends block matching/regex
     -e|--block-end-regex <REGEX>   Supply a (PCRE) regex to match block endings
+    -d|--ignore-indent             Ignore indentation and only look at end-regex
     --separator <SEPARATOR>        Text used to separate output blocks
     --block-line-filter <COMMAND>  Filter block contents through this command
 
