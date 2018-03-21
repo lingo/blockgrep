@@ -1,10 +1,10 @@
 BLOCKGREP
 =========
 
-[Blockgrep](#Blockgrep)
-[SYNOPSIS](#SYNOPSIS)
-[OPTIONS](#OPTIONS)
-[DESCRIPTION](#DESCRIPTION)
+[Blockgrep](#Blockgrep)\
+[SYNOPSIS](#SYNOPSIS)\
+[OPTIONS](#OPTIONS)\
+[DESCRIPTION](#DESCRIPTION)\
 [EXAMPLES](#EXAMPLES)
 
 ------------------------------------------------------------------------
