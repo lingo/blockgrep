@@ -1,0 +1,10 @@
+Package: blockgrep
+Version: 1.0
+Section: custom
+Priority: optional
+Architecture: all
+Essential: no
+Installed-Size: 9563
+Maintainer: speak.geek.nz
+Description: Grep tool which block of code following match
+
