@@ -25,27 +25,39 @@ use constant MODE_SEEK_BLOCK_END => 1;
 
 # declare the perl command line flags/options we want to allow
 my %options=(
-	'separator' => '-' x 60,
+	'separator' => '-' x 60 . "\n",
     'ignore-case'  => 1,
-    # 'invert-match' => 0,
+	'ignore-indent' => 0,
+    # 'invert-match'   => 0,
+    'block-head-lines' => 0,
+    'block-tail-lines' => 0,
 	'print-block-end-indent' => 0,
     'print-block-end-regex'  => 1,
     'print-block-end-eof'  => 1,
     'print-block-start'      => 1,
 	'debug' => 0,
-	'block-end-regex' => q[^\s*(done\b|end\b|\})],
+	'block-end-regex' => q[(^__START_INDENT__(done\b|end\b|fi\b|\}))|</],
 );
 GetOptions(\%options,
     # 'help|h',
     'ignore-case|i!',
+	'ignore-indent|d!',
 	'debug!',
     's' => sub { $options{'ignore-case'} = 0; },
     # 'invert-match|v!',
     'separator|p:s',
-    'print-block-end-regex|R!',
-    'print-block-end-indent|I!',
-    'print-block-start|m!',
+    'only-block|O!' => sub {
+        $options{'print-block-end-regex'} =
+        $options{'print-block-start'} =
+        $options{'print-block-end-indent'} = 0;
+    },
+    'print-block-end-regex|endregex|R!',
+    'print-block-end-indent|endindent|I!',
+    'print-block-start|start|m!',
+	'block-end-regex|regex|e:s',
     'M' => sub { $options{'print-block-start'} = 0; },
+    'block-head-lines|head:n',
+    'block-tail-lines|tail:n',
     'block-line-filter|filter|f:s',
 ) or croak $!;
 
@@ -54,7 +66,6 @@ GetOptions(\%options,
 #     croak();
 # }
 
-$options{'block-end-regex'} = qr/$options{'block-end-regex'}/;
 
 my $pattern = $ARGV[0];
 if ($pattern !~ /[\^\$\(]/) {
@@ -93,11 +104,10 @@ sub detect_indent {
 		print "# mixed indent\n" if $options{debug};
 		my $tabCount =()= $indentStr =~ /\t+/g;
 		my $spaceCount =()= $indentStr =~ /[ ]+/g;
-		return $tabCount || $spaceCount;
+		return ($tabCount || $spaceCount, $indentStr);
 	}
-	#print "# Indent String is |$indentStr|\n";
 	#print "# count is |$count|\n" if $options{debug};
-	return $count;
+	return ($count, $indentStr);
 }
 
 sub end_block {
@@ -113,7 +123,11 @@ sub end_block {
     if ($options{$optionKey}) {
         print $line . "\n";
     }
-    print $options{separator} . "\n";
+    for ($options{separator}) {
+        s/\\n/\n/g;
+        s/\\0+/\x0/g;
+    }
+    print $options{separator}
 }
 
 my $mode = MODE_MATCH_PATTERN;
@@ -121,33 +135,53 @@ my $matchIndent = -1;
 my $indent = 0;
 
 my $block = '';
+my $blockEndRx;
+my $indentStr = '';
+my $skipCount = 0;
+my $startIndentStr;
 
-while(<>) {
+LINE: while(<>) {
 	chomp;
 	my $line = $_;
-	given ($mode) {
+    ($indent, $indentStr) = detect_indent($line);
+	MODE: given ($mode) {
 		when(MODE_SEEK_BLOCK_END) {
-			if ($matchIndent < 0) {
-				$matchIndent = detect_indent($line);
+            while ($skipCount < $options{'block-head-lines'}) {
+                $skipCount++;
+                print "Skipped 1, $skipCount\n" if $options{debug};
+                next LINE;
+            }
+            print "# Indent count is $indent, |$indentStr| match string is |$startIndentStr|\n" if $options{debug};
+            if ($matchIndent < 0) {
+				$matchIndent = $indent;
+				$blockEndRx = $options{'block-end-regex'};
+                for($blockEndRx) {
+                    s/__START_INDENT__/$startIndentStr/g;
+                    s/__INDENT__/$indentStr/g;
+                }
+				print '|' . $blockEndRx . "|\n" if $options{debug};
+                print "$line\n" if $options{debug};
+				$blockEndRx = qr/$blockEndRx/;
 			}
-			$indent = detect_indent($line);
-            if ($line =~ $options{'block-end-regex'}) {
+			elsif ($line =~ $blockEndRx) {
                 print "# Endblock symbol found \n" . $line . "\n" if $options{debug};
                 $mode = MODE_MATCH_PATTERN;
                 end_block($block, $line, 'regex');
                 $block = '';
-                next;
-            } elsif ($indent != $matchIndent) {
+                next LINE;
+            } elsif (!$options{'ignore-indent'} && $indent < $matchIndent) {
 				print "# Indent not match\n" . $line . "\n" if $options{debug};
 				$mode = MODE_MATCH_PATTERN;
                 end_block($block, $line, 'indent');
                 $block = '';
-                next;
+                next LINE;
 			}
             $block .= $line . "\n";
 		}
 		default {
 			if ($line =~ $pattern) {
+                $startIndentStr = $indentStr;
+                $skipCount = 0;
 				$mode = MODE_SEEK_BLOCK_END;
                 if ($options{'print-block-start'}) {
     				print $line . "\n";
