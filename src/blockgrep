@@ -118,8 +118,8 @@ sub detect_indent {
 sub end_block {
     my ($block, $line, $cause) = @_ or croak 'end_block requires block,line,cause as params';
 
-    if ($options{'block-line-filter'}) {
-        $block = filter($block, $options{'block-line-filter'}) or croak $!;
+    if ($options{'block-line-filter'} && $block) {
+        $block = filter($block, $options{'block-line-filter'}) or carp "# Error filtering through $options{'block-line-filter'} : $!";
     }
     print $block;
 
@@ -131,7 +131,7 @@ sub end_block {
     for ($options{separator}) {
         s/\\n/\n/g;
         s/\\0+/\x0/g;
-    }
+    } 
     print $options{separator}
 }
 
