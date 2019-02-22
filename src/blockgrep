@@ -4,12 +4,15 @@
 #
 use warnings;
 no warnings qw(experimental);
-
+use feature qw(:5.14);
 use strict;
+
+our $VERSION = '1.03';
+
+use IO::Handle;
 use Data::Dumper;
 use Carp;
 use Getopt::Std;
-use feature qw(:5.14);
 use Getopt::Long qw(:config no_ignore_case bundling auto_version auto_help);
 use Pod::Usage;
 use IPC::Filter qw(filter);
@@ -19,247 +22,406 @@ $SIG{'PIPE'} = sub {
     croak $!;
 };
 
-
 use constant MODE_MATCH_PATTERN => 0;
 use constant MODE_SEEK_BLOCK_END => 1;
 
 # declare the perl command line flags/options we want to allow
 my %options=(
-	'separator' => '-' x 60 . "\n",
-    'ignore-case'  => 1,
-	'ignore-indent' => 0,
-    # 'invert-match'   => 0,
-    'block-head-lines' => 0,
-    'block-tail-lines' => 0,
-	'print-block-end-indent' => 0,
-    'print-block-end-regex'  => 1,
-    'print-block-end-eof'  => 1,
+    'debug'                  => 0, # Output debug info
+	'separator'              => '-' x 60 . "\n", # What to print between found blocks
+    'ignore-case'            => 1, # Case-insensitive pattern match
+	'ignore-indent'          => 0, # Ignore indentation changes, only look for block-end-regex
+    'invert-match'           => 0, # Invert pattern matching logic, ie. look for lines that dont match
+	# 'print-block-end-indent' => 0,
+ #    'print-block-end-regex'  => 1,
+ #    'print-block-end-eof'    => 1,
+    'print-block-end'        => 1,
     'print-block-start'      => 1,
-	'debug' => 0,
-	'block-end-regex' => q[(^__START_INDENT__(done\b|end\b|fi\b|\}))|</],
+	'block-end-regex'        => q[(^\I((done|end|fi)\b|\}))|</],
 );
-GetOptions(\%options,
-    # 'help|h',
-    'ignore-case|i!',
-	'ignore-indent|d!',
-	'debug!',
-    's' => sub { $options{'ignore-case'} = 0; },
-    # 'invert-match|v!',
-    'separator|p:s',
-    'only-block|O!' => sub {
-        $options{'print-block-end-regex'} =
-        $options{'print-block-start'} =
-        $options{'print-block-end-indent'} = 0;
-    },
-    'print-block-end-regex|endregex|R!',
-    'print-block-end-indent|endindent|I!',
-    'print-block-start|start|m!',
-	'block-end-regex|regex|e:s',
-
-    'M' => sub { $options{'print-block-start'} = 0; },
-    'block-head-lines|head:n',
-    'block-tail-lines|tail:n',
-    'block-line-filter|filter|f:s',
-) or croak $!;
-
-# if ($options{help}) {
-#     pod2usage();
-#     croak();
-# }
 
 
-my $pattern = $ARGV[0];
-if ($pattern !~ /[\^\$\(]/) {
-    $pattern = qq(.*$pattern.*);
+sub obsoleteOption {
+    my $opt = shift or croak "Required argument to obsoleteOption";
+
+    printf STDERR "Sorry, the option '%s' is now obsolete, please use --help\n", $opt;
+    exit 2;
 }
 
-if ($options{'ignore-case'}) {
-    $pattern = qr/.*$pattern.*/i;
-} else {
-    $pattern = qr/.*$pattern.*/;
-}
+sub parse_options {
+    GetOptions(\%options,
+        'debug!',
+        'h' => sub { pod2usage(); exit(2); },
+        'ignore-case|i!',
+        'ignore-indent|d!',
+        'separator|p:s',
+        'print-block-start|pstart!',
+        'print-block-end|pend!',
+        'block-start-regex|bstart|S:s',
+        'block-end-regex|bend|e:s',
+        'block-line-filter|filter|f:s',
+        'print-block-end-regex|endregex|R!' => sub { obsoleteOption('print-block-end-regex'); },
+        'print-block-end-indent|endindent|I!' => sub {
+            obsoleteOption('print-block-end-indent'); },
+        's'      => sub { obsoleteOption('s') },
+        'M'      => sub { obsoleteOption('M') },
+        'm!'     => sub { obsoleteOption('m') },
+        'O!'     => sub { obsoleteOption('O') },
+        'head:n' => sub { obsoleteOption('head') },
+        'tail:n' => sub { obsoleteOption('tail') }
+    ) or croak $!;
 
-shift @ARGV;
-
-if ($options{debug}) {
-	print "# Seek $pattern\n";
-	print "# Options: \n" . Dumper(\%options);
-	print "# ARGV:\n" . Dumper(\@ARGV);
-}
-
-sub detect_indent {
-	my $str = shift @_;
-    unless($str) {
-        return 0, '';
-    }
-	my $count = 0;
-	my $indentStr = $str =~ s/^(\s+).*/$1/r;
-
-	unless($indentStr =~ /^\s+$/) {
-		return 0, '';
-	}
-
-	if ($indentStr =~ /^\t+$/) { # Tabs
-		#print "# only tabs\n";
-		$count =()= $indentStr =~ /\t/g;
-	} elsif ($indentStr =~ /^[ ]+$/) { # Spaces
-		#print "# only spaces\n";
-		$count =()= $indentStr =~ /[ ]/g;
-	} else { # Mixed
-		print "# mixed indent: |$indentStr|\n" if $options{debug};
-		my $tabCount =()= $indentStr =~ /\t+/g;
-		my $spaceCount =()= $indentStr =~ /[ ]+/g;
-		return ($tabCount || $spaceCount, $indentStr);
-	}
-	#print "# count is |$count|\n" if $options{debug};
-	return ($count, $indentStr);
-}
-
-sub end_block {
-    my ($block, $line, $cause) = @_ or croak 'end_block requires block,line,cause as params';
-
-    if ($options{'block-line-filter'} && $block) {
-        $block = filter($block, $options{'block-line-filter'}) or carp "# Error filtering through $options{'block-line-filter'} : $!";
-    }
-    print $block;
-
-    my $optionKey = 'print-block-end-' . $cause;
-    # print $optionKey . ' => ' . $options{$optionKey} ."\n";
-    if ($options{$optionKey}) {
-        print $line . "\n";
-    }
     for ($options{separator}) {
         s/\\n/\n/g;
         s/\\0+/\x0/g;
-    } 
-    print $options{separator}
+    }
+
+    $options{pattern} = get_pattern($ARGV[0]);
+    shift @ARGV;
+
+    if ($options{'block-start-regex'}) {
+        $options{'block-start-regex'} = get_pattern($options{'block-start-regex'});
+    } else {
+        $options{'block-start-regex'} = $options{pattern};
+    }
 }
 
-my $mode = MODE_MATCH_PATTERN;
-my $matchIndent = -1;
-my $indent = 0;
+sub end_block {
+    my ($writer, $blockStart, $block, $line, $cause) = @_ or croak 'end_block requires block,line,cause as params';
 
-my $block = '';
-my $blockEndRx;
-my $indentStr = '';
-my $skipCount = 0;
-my $startIndentStr;
+    return unless $block;
 
-LINE: while(<>) {
-	chomp;
-	my $line = $_;
-    ($indent, $indentStr) = detect_indent($line);
-	MODE: given ($mode) {
-		when(MODE_SEEK_BLOCK_END) {
-            while ($skipCount < $options{'block-head-lines'}) {
-                $skipCount++;
-                print "Skipped 1, $skipCount\n" if $options{debug};
-                next LINE;
+    if ($options{'block-line-filter'} && $block) {
+        $block = filter($block, $options{'block-line-filter'})
+            or carp "# Error filtering through $options{'block-line-filter'} : $! $?";
+    }
+
+    if ($options{'print-block-start'}) {
+        $writer->print($blockStart);
+    }
+
+    $writer->print($block);
+
+    if ($options{'print-block-end'}) {
+        $writer->print($line . "\n");
+    }
+    $writer->print($options{separator});
+}
+
+
+sub detect_indent {
+    my $str = shift @_;
+
+    chomp $str;
+    unless($str) {
+        return 0, '';
+    }
+
+
+    my $count     = 0;
+    my $indentStr = $str =~ s/^(\s+)(\S+.*)$/$1/r; # Uses new /r (return) modifier
+
+    unless($indentStr =~ /^\s+$/) {
+        return 0, '';
+    }
+
+    if ($indentStr =~ /^\t+$/) { # Tabs
+        $count =()= $indentStr =~ /\t/g;
+    } elsif ($indentStr =~ /^[ ]+$/) { # Spaces
+        $count =()= $indentStr =~ /[ ]/g;
+    } else { # Mixed, *ick!*
+        print "# mixed indent: |$indentStr|\n" if $options{debug};
+        my $tabCount   =()= $indentStr =~ /\t+/g;
+        my $spaceCount =()= $indentStr =~ /[ ]+/g;
+
+        return ($tabCount || $spaceCount, $indentStr);
+    }
+    #print "# count is |$count|\n" if $options{debug};
+    return ($count, $indentStr);
+}
+
+sub blockgrep {
+    my ($options, $files) = @_
+        or croak;
+
+    my $ioDebug;
+
+    if ($options->{debug}) {
+        $ioDebug = $options->{ioDebug} || new IO::Handle->fdopen(fileno(STDERR), "w") or croak "Cannot open STDERR $! $?";
+    }
+
+    my $io = $options->{writer}       || new IO::Handle->fdopen(fileno(STDOUT), "w") or croak "Cannot open STDOUT $! $?";
+
+    my $block        = '';
+    my $blockStart   = '';
+    my ($indentSize, $indentAtBlockStart, $indentWithinBlock, $matchIndent);
+    my $matchesPattern;
+    my $blockStartRx = $options->{'block-start-regex'};
+    my $blockEndRx   = $options->{'block-end-regex'};
+    my $pattern      = $options->{'pattern'} || $blockStartRx;
+
+    @ARGV=@{$files};
+
+    my $line;
+
+    LINE: while(1) {
+        $matchesPattern = 0;
+
+        SEEK_BLOCK_START:
+        while ($line = <<>>) {
+            if ($line =~ $blockStartRx) {
+                $ioDebug->print("Match block start: $line\n") if $options->{debug};
+                $blockStart = $line;
+                ($indentSize, $indentAtBlockStart) = detect_indent($line);
+                $matchIndent = $indentSize;
+
+                $ioDebug->print("block start indent = |$indentAtBlockStart| (size $indentSize") if $options->{debug};
+
+                # if ($line =~ $pattern) {
+                #     $matchesPattern = 1;
+                #     $ioDebug->print("Pattern match! $line\n") if $options->{debug};
+                # }
+
+                last SEEK_BLOCK_START;
             }
-            print "# Indent count is $indent, |$indentStr| match string is |$startIndentStr|\n" if $options{debug};
-            if ($matchIndent < 0) {
-				$matchIndent = $indent;
-				$blockEndRx = $options{'block-end-regex'};
-                for($blockEndRx) {
-                    s/__START_INDENT__/$startIndentStr/g;
-                    s/__INDENT__/$indentStr/g;
-                }
-				print '|' . $blockEndRx . "|\n" if $options{debug};
-                print "$line\n" if $options{debug};
-				$blockEndRx = qr/$blockEndRx/;
-			}
-			elsif ($line =~ $blockEndRx) {
-                print "# Endblock symbol found \n" . $line . "\n" if $options{debug};
-                $mode = MODE_MATCH_PATTERN;
-                end_block($block, $line, 'regex');
+        }
+        if (defined($line)) {
+            $line = <<>>;
+        }
+        # If either of last 2 calls to <<>> failed, end now
+        if (!defined($line)) {
+            last LINE;
+        }
+
+        # Replace our custom indent metacharacters with specific text
+        ($indentSize, $indentWithinBlock) = detect_indent($line);
+        $blockEndRx  = $options->{'block-end-regex'};
+        for($blockEndRx) {
+            s/\\I/$indentAtBlockStart/g;
+            s/\\i/$indentWithinBlock/g;
+        }
+        $blockEndRx = qr/$blockEndRx/;
+        $ioDebug->print('end rx = ' . $blockEndRx) if $options->{debug};
+
+        $matchesPattern ||= $line =~ $pattern;
+        $ioDebug->print("Pattern match! $line\n") if $matchesPattern && $options->{debug};
+
+        SEEK_END_LINE:
+        while(defined($line)) {
+            ($indentSize, $indentWithinBlock) = detect_indent($line);
+
+            if (!$matchesPattern && $line =~ $pattern) {
+                $ioDebug->print("Pattern match! $line\n") if $options->{debug};
+                $matchesPattern = 1;
+            }
+
+            if ($line =~ $blockEndRx) {
+                $ioDebug->print("# Endblock symbol found '$line'\n") if $options->{debug};
+                end_block($io, $blockStart, $block, $line, 'regex') if $matchesPattern;
                 $block = '';
-                next LINE;
-            } elsif (!$options{'ignore-indent'} && $indent < $matchIndent) {
-				print "# Indent not match\n" . $line . "\n" if $options{debug};
-				$mode = MODE_MATCH_PATTERN;
-                end_block($block, $line, 'indent');
+                last SEEK_END_LINE;
+            }
+
+            if ($options->{debug}) {
+                my $l = $line; chomp $l;
+                $ioDebug->print("$indentSize <=> $matchIndent: $l\n");
+            }
+
+            if (!$options->{'ignore-indent'} && $indentSize < $matchIndent) {
+                $ioDebug->print("# Indent does not match; end block\n" . $line . "\n") if $options->{debug};
+                end_block($io, $blockStart, $block, $line, 'indentSize') if $matchesPattern;
                 $block = '';
-                next LINE;
-			}
-            $block .= $line . "\n";
-		}
-		default {
-			if ($line =~ $pattern) {
-                $startIndentStr = $indentStr;
-                $skipCount = 0;
-				$mode = MODE_SEEK_BLOCK_END;
-                if ($options{'print-block-start'}) {
-    				print $line . "\n";
-                }
-				$matchIndent = -1;
-				next;
-			}
-		}
-	}
+                last SEEK_END_LINE;
+            }
+
+            $block .= $line;
+            $line = <<>>;
+        }
+
+        if (!defined($line)) {
+            last LINE;
+        }
+    }
+
+    end_block($io, $blockStart, $block, '', 'eof');
 }
-end_block($block, '', 'eof');
+
+sub get_pattern {
+    my $pattern = $_[0] or do {
+        pod2usage(); #$ARGV[0];
+        exit(2);
+    };
+
+    if ($pattern !~ /[\^\$\(]/) {
+        $pattern = qq(.*$pattern.*);
+    }
+
+    if ($options{'ignore-case'}) {
+        $pattern = qr/$pattern/i;
+    } else {
+        $pattern = qr/$pattern/;
+    }
+
+    return $pattern;
+}
+
+sub main {
+    parse_options();
+
+    if ($options{debug}) {
+        print "# Seek $options{pattern}\n";
+        print "# Options: \n" . Dumper(\%options);
+        print "# ARGV:\n" . Dumper(\@ARGV);
+    }
+
+    blockgrep(\%options, \@ARGV);
+}
 
 
+if (caller) {
+    use Exporter qw(import);
+    our @EXPORT_OK = qw/blockgrep/;
+} else {
+    __PACKAGE__->main(\@ARGV);
+}
 
 #print "# EOF\n";
 __END__
+=encoding utf8
 
 =head1 Blockgrep
 
-Grep for a given pattern, then print lines until end of block.
-
-The end of a block is defined by a change of indent, or certain keywords
-or symbols, such as 'end', 'done', 'fi', or '}'
-
+Grep for a given pattern within blocks in files.
 
 =head1 SYNOPSIS
 
-blockgrep [options] <PATTERN> [<FILES>]
+blockgrep [OPTIONS] I<PATTERN> [I<FILE>...]
 
-Greps FILES or STIND for PATTERN, outputting blocks.
+Searches for I<PATTERN> in each I<FILE> (or I<STDIN>, if no filenames are supplied).
 
-  Options ([*] marks defaults)
+Unlike other greps, B<blockgrep> outputs blocks (typically of code) which contain a match.
 
-    -h|--help                      Help on usage
-    -i|--ignore-case               [*] Case-insensitive matching
-    -s|--no-ignore-case            Case sensitive matching
-    -m|--print-block-start         [*] Print matching line that start blockgrep
-    -M|--no-print-block-start      Don't print line that starts block
-    -I|--print-block-end-indent    Print line that ends block by indent change
-    -R|--print-block-end-regex     [*] Print line that ends block matching/regex
-    -e|--block-end-regex <REGEX>   Supply a (PCRE) regex to match block endings
-    -d|--ignore-indent             Ignore indentation and only look at end-regex
-    --separator <SEPARATOR>        Text used to separate output blocks
-    --block-line-filter <COMMAND>  Filter block contents through this command
+=head2 Options
 
-=head1 OPTIONS
+=pod
 
+  -h|--help                      Help on usage
+  -i|--ignore-case               Case-insensitive matching (*default)
+  -s|--no-ignore-case            Case sensitive matching
+  -m|--print-block-start         Show line that matches block start (*default)
+  -I|--print-block-end-indent    Print line that ends block by indent change
+  -R|--print-block-end-regex     Print line that ends block (*default)
+  -S|--block-start-regex REGEX   Supply a regex to match block starts
+  -e|--block-end-regex REGEX     Supply a regex to match block endings
+  -d|--ignore-indent             Ignore indentation and only look at block end regex
+  --separator <SEPARATOR>        Text used to separate output blocks
+  --block-line-filter <COMMAND>  Filter block contents through this command
+
+=head1 BLOCKS
+
+By default, I<PATTERN> is used to recognize the start of a block.
+
+The end of a block is defined by a change of indent, or certain keywords
+or symbols, such as C<end>, C<done>, C<fi>, or C<}>
+
+=head2 CUSTOM BLOCK PATTERNS
+
+You can give your own block definitions using B<--block-start-regex> and B<--block-end-regex>.
+
+In this case B<blockgrep> will print the entirety of each block that contains a line matching I<PATTERN>
+
+You can also ignore indentation changes using B<--ignore-indent>
+
+=head2 CUSTOM METACHARACTERS
+
+In B<--block-end-regex> and I<PATTERN> you can use a couple of extra metacharacters beyond L<the usual set used by Perl|https://perldoc.perl.org/perlre.html>
 
 =over 4
 
-=item B<-help>
+=item * B<\I>
+
+This stands in for 'match the indentation level used by the block start'
+This is useful to make sure we match, for example, the correct closing brace.
+
+B<Example:>
+
+Find C<if> statements and print any that contain a C<return>
+
+    blockgrep 'return' --block-start-regex 'if\s+\(.+' --block-end-regex '\I\}' file.c
+
+=item * B<\i>
+
+This stands in for 'match the indentation level used by the block contents', which is technically the indentation used by the first line after the block start.
+
+
+=back
+
+=head1 OPTIONS
+
+Any toggle options can be negated by prefixing "no" onto the option.
+e.g. B<--no-print-block-start> or B<--no-pstart>
+
+=over 4
+
+=item B<--help>
 
 Print a brief help message and exits.
 
-=item B<-print-block-start>
+=item B<--print-block-start>
 
-Print the line matching <pattern> that starts the block.  This is true by default.
+I<shortcut> B<--pstart>
 
-=item B<--print-block-end-indent>
+Print the line matching <pattern> that starts the block.  This is true by default.  You can disable this with B<--no-pstart> or B<--no-print-block-start>
 
-If a block is ended because of a change of indentation, then print the line
-that ends the block (default is false)
+=item B<--print-block-end>
 
-=item B<--print-block-end-regex>
+I<shortcut> B<--pend>
 
-If a block is ended because matching a regular expression then print the line
-that ends the block (default is true).
-The default regex should match 'fi|done|end|\}'.  You can change this with
---block-end-regex
+Print the line that ends the block.  This is enabled by default and can be disabled, as with the previous option, by using B<--no-print-block-end>
+
+=item B<--block-start-regex> <REGEX>
+
+I<shortcut> B<--bs>
+
+Supply a custom (PCRE) regular expression to match block starts.
+
+If this is supplied, then blocks which contain I<PATTERN> will be printed.
+Otherwise, if this is not supplied, then I<PATTERN> is used to recognize where blocks start.
+
+So you can either:
+
+=over 4
+
+Output all blocks starting with PATTERN
+and ending with --block-end-regex
+
+=back
+
+I<OR>
+
+=over 4
+
+Output all blocks containing a line matching PATTERN,
+using --block-start-regex to describe block starts, and
+--block-end-regex to describe block ends
+
+=back
 
 =item B<--block-end-regex> <REGEX>
 
+I<shortcut> B<--be>
+
 Supply a custom (PCRE) regular expression to match block endings
+The default pattern, at time of writing is equivalent to the following:
+
+qr{
+    (?:
+        ^ \I # Begining of line, followed by indentation matching block start indent
+        (?:
+            (?: done|end|fi)\b | \} # A keyword or '}'
+        )
+    ) |<\/ # Or none of the above, and an end tag
+}x
 
 =item B<--separator> <SEPARATOR>
 
@@ -268,26 +430,27 @@ The default separator is a line of dashes, 60 characters long
 
 =item B<--block-line-filter> <COMMAND>
 
-Using this option you can filter block content (not the starting or ending lines)
-through an external command.
+I<shortcut> B<--filter>
+
+Using this option you can filter block content (not the starting or ending lines) through an external command.
 
 =back
 
 =head1 DESCRIPTION
 
 B<blockgrep> will acts like grep, but will print the block that follows each match.
-A block is defined by default as the text following the match, up til the first change of indentation, or matching keyword or symbol.
-By default the keywords 'end', 'done', 'fi', and the symbol '}' are counted as block enders.
 
-The default behaviour is to print all matching lines from the start of a matching block, until the end, including any block ending symbols/keywords.
-If a block is ended by a change of indentation, then by default the line that changes indentation is not printed.
-This can be changed using the --print-block-end-indent option.
+A block is defined by a start and end expressions.
+
+By default PATTERN is used as the start expression, and the block continues until the first change of indentation, or until a matching end expression is found.
+
+The end expression can be set by --block-end-regex, and has a sensible default value for common programming languages. L<See --block-end-regex|/--block-end-regex>
 
 =head1 EXAMPLES
 
 blockgrep function file.c
 
-pacmd --list-cards | blockgrep profile --no-print-block-start --block-line-filter='cut -d: -f2'
+blockgrep 'parse_options' --block-start-regex '^\s*sub\s+' --block-line-filter='perltidy' t/example.pl
 
 
 =cut
