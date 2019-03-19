@@ -1,102 +1,176 @@
-BLOCKGREP
+-   [Blockgrep](#Blockgrep)
+-   [SYNOPSIS](#SYNOPSIS)
+    -   [Options](#Options)
+-   [BLOCKS](#BLOCKS)
+    -   [CUSTOM BLOCK PATTERNS](#CUSTOM-BLOCK-PATTERNS)
+    -   [CUSTOM METACHARACTERS](#CUSTOM-METACHARACTERS)
+-   [OPTIONS](#OPTIONS)
+-   [DESCRIPTION](#DESCRIPTION)
+-   [EXAMPLES](#EXAMPLES)
+
+Blockgrep {#Blockgrep}
 =========
 
-[Blockgrep](#Blockgrep)\
-[SYNOPSIS](#synposis)\
-[OPTIONS](#options)\
-[DESCRIPTION](#description)\
-[EXAMPLES](#examples)
+Grep for a given pattern within blocks in files.
 
-------------------------------------------------------------------------
+SYNOPSIS {#SYNOPSIS}
+========
 
-Blockgrep
---------------
+blockgrep \[OPTIONS\] *PATTERN* \[*FILE*...\]
 
-Grep for a given pattern, then print lines until end of block.
+Searches for *PATTERN* in each *FILE* (or *STDIN*, if no filenames are
+supplied).
+
+Unlike other greps, **blockgrep** outputs blocks (typically of code)
+which contain a match.
+
+Options {#Options}
+-------
+
+Those marked with a \[\*\] are defaults
+
+      -h|--help                      Help on usage
+      -i|--ignore-case               [*] Case-insensitive matching (*default)
+      -s|--no-ignore-case            Case sensitive matching
+      -m|--print-block-start         [*] Show the line that matched block start
+      -I|--print-block-end           [*] Print the line that ended the block
+      -S|--block-start-regex REGEX   Supply a regex to match block starts
+      -E|--block-end-regex REGEX     Supply a regex to match block endings
+      -d|--ignore-indent             Ignore indentation and only look at block end regex
+      --block-start-matches          If you're using -S, you may want to allow for PATTERN also matching in the block start.
+      --separator <SEPARATOR>        Text used to separate output blocks
+      --block-line-filter <COMMAND>  Filter block contents through this command
+
+BLOCKS {#BLOCKS}
+======
+
+By default, *PATTERN* is used to recognize the start of a block.
 
 The end of a block is defined by a change of indent, or certain keywords
-or symbols, such as ’end’, ’done’, ’fi’, ’}’ or '</'
+or symbols, such as `end`, `done`, `fi`, or `}`
 
-SYNOPSIS
--------------
+CUSTOM BLOCK PATTERNS {#CUSTOM-BLOCK-PATTERNS}
+---------------------
 
-`blockgrep [options] <PATTERN> [<FILES>]`
+You can give your own block definitions using **--block-start-regex**
+and **--block-end-regex**.
 
-Greps FILES or STDIN for PATTERN, outputting blocks found.
+In this case **blockgrep** will print the entirety of each block that
+contains a line matching *PATTERN*
 
-~~~
-  Options ([*] marks defaults)
-    −h|−−help                      Help on usage
-    −i|−−ignore−case               [*] Case−insensitive matching
-    −s|−−no−ignore−case            Case sensitive matching
-    −m|−−print−block−start         [*] Print matching line that start blockgrep
-    −M|−−no−print−block−start      Don't print line that starts block
-    −I|−−print−block−end−indent    Print line that ends block by indent change
-    −R|−−print−block−end−regex     [*] Print line that ends block matching/regex
-    −e|−−block−end−regex <REGEX>   Supply a (PCRE) regex to match block endings
-    −−separator <SEPARATOR>        Text used to separate output blocks
-    −−block−line−filter <COMMAND>  Filter block contents through this command
-~~~
+You can also ignore indentation changes using **--ignore-indent**
 
-OPTIONS
-------------
+CUSTOM METACHARACTERS {#CUSTOM-METACHARACTERS}
+---------------------
 
-**−help**
+In **--block-end-regex** and *PATTERN* you can use a couple of extra
+metacharacters beyond [the usual set used by
+Perl](https://perldoc.perl.org/perlre.html)
 
-Print a brief help message and exits.
+-   **\\I** *(capital i)*
 
-**−print−block−start**
+    This stands in for 'match the indentation level used by the block
+    start' This is useful to make sure we match, for example, the
+    correct closing brace.
 
-Print the line matching &lt;pattern&gt; that starts the block. This is
-true by default.
+    **Example:**
 
-**−−print−block−end−indent**
+    Find `if` statements and print any that contain a `return`
 
-If a block is ended because of a change of indentation, then print the
-line that ends the block (default is false)
+            blockgrep 'return' --block-start-regex 'if\s+\(.+' --block-end-regex '\I\}' file.c
 
-**−−print−block−end−regex**
+-   **\\i**
 
-If a block is ended because matching a regular expression then print the
-line that ends the block (default is true). The default regex should
-match ’fi|done|end|\\}’. You can change this with −−block−end−regex
+    This stands in for 'match the indentation level used by the block
+    contents', which is technically the indentation used by the first
+    line after the block start.
 
-**−−block−end−regex** &lt;REGEX&gt;
+OPTIONS {#OPTIONS}
+=======
 
-Supply a custom ( PCRE ) regular expression to match block endings
+Any toggle options can be negated by prefixing "no" onto the option.
+e.g. **--no-print-block-start** or **--no-pstart**
 
-**−−separator** &lt;SEPARATOR&gt;
+**--help**
 
-Provide custom text to be printed between blocks in program output. The
-default separator is a line of dashes, 60 characters long
+:   Print a brief help message and exits.
 
-**−−block−line−filter** &lt;COMMAND&gt;
+**--print-block-start**
 
-Using this option you can filter block content (not the starting or
-ending lines) through an external command.
+:   *shortcut* **--pstart**
 
-DESCRIPTION
-----------------
+    Print the line matching &lt;pattern&gt; that starts the block. This
+    is true by default. You can disable this with **--no-pstart** or
+    **--no-print-block-start**
+
+**--print-block-end**
+
+:   *shortcut* **--pend**
+
+    Print the line that ends the block. This is enabled by default and
+    can be disabled, as with the previous option, by using
+    **--no-print-block-end**
+
+**--block-start-regex** &lt;REGEX&gt;
+
+:   *shortcut* **-S**
+
+    Supply a custom (PCRE) regular expression to match block starts.
+
+    If this is supplied, then blocks which contain *PATTERN* will be
+    printed. Otherwise, if this is not supplied, then *PATTERN* is used
+    to recognize where blocks start.
+
+    So you can either:
+
+    *OR*
+
+**--block-end-regex** &lt;REGEX&gt;
+
+:   *shortcut* **-E**
+
+    Supply a custom (PCRE) regular expression to match block endings The
+    default pattern, at time of writing is equivalent to the following:
+
+    qr{ (?: \^ \\I \# Begining of line, followed by indentation matching
+    block start indent (?: (?: done|end|fi)\\b | \\} \# A keyword or '}'
+    ) ) |&lt;\\/ \# Or none of the above, and an end tag }x
+
+**--separator** &lt;SEPARATOR&gt;
+
+:   Provide custom text to be printed between blocks in program output.
+    The default separator is a line of dashes, 60 characters long If you
+    don't want any separators use the empty string
+
+    e.g. `--separator=''`
+
+**--block-line-filter** &lt;COMMAND&gt;
+
+:   *shortcut* **--filter**
+
+    Using this option you can filter block content (not the starting or
+    ending lines) through an external command.
+
+DESCRIPTION {#DESCRIPTION}
+===========
 
 **blockgrep** will acts like grep, but will print the block that follows
-each match. A block is defined by default as the text following the
-match, up til the first change of indentation, or matching keyword or
-symbol. By default the keywords ’end’, ’done’, ’fi’, and the symbol ’}’
-are counted as block enders.
+each match.
 
-The default behaviour is to print all matching lines from the start of a
-matching block, until the end, including any block ending
-symbols/keywords. If a block is ended by a change of indentation, then
-by default the line that changes indentation is not printed. This can be
-changed using the −−print−block−end−indent option.
+A block is defined by a start and end expressions.
 
-EXAMPLES
--------------
-~~~
+By default PATTERN is used as the start expression, and the block
+continues until the first change of indentation, or until a matching end
+expression is found.
+
+The end expression can be set by --block-end-regex, and has a sensible
+default value for common programming languages. [See
+--block-end-regex](#block-end-regex)
+
+EXAMPLES {#EXAMPLES}
+========
+
 blockgrep function file.c
 
-pacmd −−list−cards | blockgrep profile −−no−print−block−start \
-−−block−line−filter=’cut −d: −f2’
-
-~~~
-
+blockgrep 'parse\_options' --block-start-regex '\^\\s\*sub\\s+'
+--block-line-filter='perltidy' t/example.pl
