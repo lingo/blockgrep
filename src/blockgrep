@@ -50,6 +50,7 @@ sub parse_options {
         'debug!',
         'h' => sub { pod2usage(); exit(2); },
         'ignore-case|i!',
+		's' => sub { $options{'ignore-case'} = 0; },
         'ignore-indent|d!',
         'separator|p:s',
         'block-start-matches|bsm!',
@@ -61,7 +62,6 @@ sub parse_options {
         'print-block-end-regex|endregex|R!' => sub { obsoleteOption('print-block-end-regex'); },
         'print-block-end-indent|endindent|I!' => sub {
             obsoleteOption('print-block-end-indent'); },
-        's'      => sub { obsoleteOption('s') },
         'M'      => sub { obsoleteOption('M') },
         'm!'     => sub { obsoleteOption('m') },
         'O!'     => sub { obsoleteOption('O') },
