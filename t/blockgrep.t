@@ -6,15 +6,40 @@
 use strict;
 use warnings;
 
-use Test::More;
+use Test::More tests => 2;
 
 BEGIN {
-	require './src/blockgrep';
-};
+    require './src/blockgrep';
+}
 
 use FindBin qw/$Bin/;
+use lib "$Bin";
 
+use StringBuffer;
 
-my $results = blockgrep(qr/test/, {}, [ $Bin . '/example.pl']);
+my @files = ( $Bin . '/example.pl' );
+my $fh    = StringBuffer->new();
 
-done_testing();
+blockgrep(
+    {
+        pattern => qr/.*parse.*/i,
+        # 'ignore-indent' => 1,
+        writer          => $fh,
+        separator => '--FNARG!'
+    },
+    \@files
+);
+
+ok($fh->get() =~ /^sub parse_options\s+\{/, "Top line extracted ok");
+ok($fh->get() =~ /\}\s*\n--FNARG!+$/s, "Last line extracted ok");
+
+blockgrep(
+    {
+        pattern => qr/.*parse.*/i,
+        writer          => $fh,
+    },
+    \@files
+);
+
+# done_testing();
+

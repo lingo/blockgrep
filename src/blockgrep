@@ -32,14 +32,11 @@ my %options=(
     'ignore-case'            => 1, # Case-insensitive pattern match
 	'ignore-indent'          => 0, # Ignore indentation changes, only look for block-end-regex
     'invert-match'           => 0, # Invert pattern matching logic, ie. look for lines that dont match
-	# 'print-block-end-indent' => 0,
- #    'print-block-end-regex'  => 1,
- #    'print-block-end-eof'    => 1,
     'print-block-end'        => 1,
     'print-block-start'      => 1,
 	'block-end-regex'        => q[(^\I((done|end|fi)\b|\}))|</],
+	'block-start-matches'    => 0
 );
-
 
 sub obsoleteOption {
     my $opt = shift or croak "Required argument to obsoleteOption";
@@ -55,6 +52,7 @@ sub parse_options {
         'ignore-case|i!',
         'ignore-indent|d!',
         'separator|p:s',
+        'block-start-matches|bsm!',
         'print-block-start|pstart!',
         'print-block-end|pend!',
         'block-start-regex|bstart|S:s',
@@ -103,9 +101,9 @@ sub end_block {
     $writer->print($block);
 
     if ($options{'print-block-end'}) {
-        $writer->print($line . "\n");
+        $writer->print($line);
     }
-    $writer->print($options{separator});
+    $writer->print($options{separator}) if $options{separator};
 }
 
 
@@ -140,23 +138,35 @@ sub detect_indent {
     return ($count, $indentStr);
 }
 
-sub blockgrep {
-    my ($options, $files) = @_
-        or croak;
+sub setup_output_handles {
+    my $options = shift or croak;
 
     my $ioDebug;
-
     if ($options->{debug}) {
         $ioDebug = $options->{ioDebug} || new IO::Handle->fdopen(fileno(STDERR), "w") or croak "Cannot open STDERR $! $?";
     }
 
-    my $io = $options->{writer}       || new IO::Handle->fdopen(fileno(STDOUT), "w") or croak "Cannot open STDOUT $! $?";
+    my $ioOut = $options->{writer} || new IO::Handle->fdopen(fileno(STDOUT), "w") or croak "Cannot open STDOUT $! $?";
+
+    my $ioIn = $options->{reader} || new IO::Handle->fdopen(fileno(STDIN), "r") or croak "Cannot open STDIN $! $?";
+
+    return ($ioOut, $ioDebug, $ioIn);
+}
+
+sub blockgrep {
+    my ($options, $files) = @_
+        or croak;
+    %options = ( %options, %$options );
+    $options = { %options, %$options }; # Merge with defaults
+    croak "Require at least {pattern=>qr/.../}" unless($options->{pattern});
+
+    my ($io, $ioDebug) = setup_output_handles($options);
 
     my $block        = '';
     my $blockStart   = '';
     my ($indentSize, $indentAtBlockStart, $indentWithinBlock, $matchIndent);
     my $matchesPattern;
-    my $blockStartRx = $options->{'block-start-regex'};
+    my $blockStartRx = $options->{'block-start-regex'} || $options->{'pattern'};
     my $blockEndRx   = $options->{'block-end-regex'};
     my $pattern      = $options->{'pattern'} || $blockStartRx;
 
@@ -177,10 +187,10 @@ sub blockgrep {
 
                 $ioDebug->print("block start indent = |$indentAtBlockStart| (size $indentSize") if $options->{debug};
 
-                # if ($line =~ $pattern) {
-                #     $matchesPattern = 1;
-                #     $ioDebug->print("Pattern match! $line\n") if $options->{debug};
-                # }
+                if ($pattern == $blockStartRx || $options->{'block-start-matches'} && $line =~ $pattern) {
+                    $matchesPattern = 1;
+                    $ioDebug->print("Pattern match begin! $line\n") if $options->{debug};
+                }
 
                 last SEEK_BLOCK_START;
             }

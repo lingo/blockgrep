@@ -4,12 +4,15 @@
 #
 use warnings;
 no warnings qw(experimental);
-
+use feature qw(:5.14);
 use strict;
+
+our $VERSION = '1.03';
+
+use IO::Handle;
 use Data::Dumper;
 use Carp;
 use Getopt::Std;
-use feature qw(:5.14);
 use Getopt::Long qw(:config no_ignore_case bundling auto_version auto_help);
 use Pod::Usage;
 use IPC::Filter qw(filter);
@@ -24,37 +27,17 @@ use constant MODE_SEEK_BLOCK_END => 1;
 
 # declare the perl command line flags/options we want to allow
 my %options=(
-    'debug'                  => 0,
-	'separator'              => '-' x 60 . "\n",
-    'ignore-case'            => 1,
-	'ignore-indent'          => 0,
-    # 'invert-match'         => 0,
-    'block-head-lines'       => 0,
-    'block-tail-lines'       => 0,
+    'debug'                  => 0, # Output debug info
+	'separator'              => '-' x 60 . "\n", # What to print between found blocks
+    'ignore-case'            => 1, # Case-insensitive pattern match
+	'ignore-indent'          => 0, # Ignore indentation changes, only look for block-end-regex
+    'invert-match'           => 0, # Invert pattern matching logic, ie. look for lines that dont match
 	'print-block-end-indent' => 0,
     'print-block-end-regex'  => 1,
     'print-block-end-eof'    => 1,
     'print-block-start'      => 1,
-	'block-end-regex'        => q[(^__START_INDENT__(done\b|end\b|fi\b|\}))|</],
+	'block-end-regex'        => q[(^\I(done\b|end\b|fi\b|\}))|</],
 );
-
-
-sub get_pattern {
-    my $pattern = $_->[0]; #$ARGV[0];
-
-    if ($pattern !~ /[\^\$\(]/) {
-        $pattern = qq(.*$pattern.*);
-    }
-
-    if ($options{'ignore-case'}) {
-        $pattern = qr/.*$pattern.*/i;
-    } else {
-        $pattern = qr/.*$pattern.*/;
-    }
-
-    return $pattern;
-}
-
 
 sub detect_indent {
 	my $str = shift @_;
@@ -64,7 +47,7 @@ sub detect_indent {
     }
 
 	my $count     = 0;
-	my $indentStr = $str =~ s/^(\s+).*/$1/r;
+	my $indentStr = $str =~ s/^(\s+)(\S+.*)$/$1/r; # Uses new /r (return) modifier
 
 	unless($indentStr =~ /^\s+$/) {
 		return 0, '';
@@ -86,137 +69,205 @@ sub detect_indent {
 }
 
 sub end_block {
-    my ($block, $line, $cause) = @_ or croak 'end_block requires block,line,cause as params';
+    my ($writer, $block, $line, $cause) = @_ or croak 'end_block requires block,line,cause as params';
+
+    return unless $block;
 
     if ($options{'block-line-filter'} && $block) {
-        $block = filter($block, $options{'block-line-filter'}) or carp "# Error filtering through $options{'block-line-filter'} : $!";
+        $block = filter($block, $options{'block-line-filter'})
+            or carp "# Error filtering through $options{'block-line-filter'} : $!";
     }
-    print $block;
 
-    my $optionKey = 'print-block-end-' . $cause;
-    # print $optionKey . ' => ' . $options{$optionKey} ."\n";
-    if ($options{$optionKey}) {
-        print $line . "\n";
+    $writer->print($block);
+
+    if ($options{'print-block-end-' . $cause}) {
+        $writer->print($line . "\n");
     }
-    for ($options{separator}) {
-        s/\\n/\n/g;
-        s/\\0+/\x0/g;
-    }
-    print $options{separator}
+    $writer->print($options{separator});
 }
 
 sub parse_options {
     GetOptions(\%options,
         'h' => sub { pod2usage(); exit(2); },
-        # 'invert-match|v!',
+        'invert-match|v!',
         'debug!',
         'ignore-case|i!',
-        # another alias for ignore-case
-        's' => sub { $options{'ignore-case'} = 0; },
+        's' => sub { $options{'ignore-case'} = 0; }, # alternative alias for ignore-case
         'ignore-indent|d!',
         'separator|p:s',
         'only-block|O!' => sub {
-            $options{'print-block-end-regex'} =
-            $options{'print-block-start'} =
+            $options{'print-block-end-regex'}  = 0;
+            $options{'print-block-start'}      = 0;
             $options{'print-block-end-indent'} = 0;
         },
         'print-block-end-regex|endregex|R!',
         'print-block-end-indent|endindent|I!',
         'print-block-start|start|m!',
+        'M' => sub { $options{'print-block-start'} = 0; }, # shortcut for --no-print-block-start
+        'block-start-regex|rxstart|S:s',
         'block-end-regex|regex|e:s',
-        'M' => sub { $options{'print-block-start'} = 0; },
-        'block-head-lines|head:n',
-        'block-tail-lines|tail:n',
         'block-line-filter|filter|f:s',
     ) or croak $!;
+
+    for ($options{separator}) {
+        s/\\n/\n/g;
+        s/\\0+/\x0/g;
+    }
+
+    $options{pattern} = get_pattern($ARGV[0]);
+    shift @ARGV;
+
+    if ($options{'block-start-regex'}) {
+        $options{'block-start-regex'} = get_pattern($options{'block-start-regex'});
+    }
+}
+
+sub blockgrep {
+    my ($options, $files) = @_
+        or croak;
+
+    my $ioDebug;
+
+    if ($options->{debug}) {
+        $ioDebug = $options->{ioDebug} || new IO::Handle->fdopen(fileno(STDERR), "w") or croak "Cannot open STDERR $! $?";
+    }
+
+    my $io = $options->{writer}       || new IO::Handle->fdopen(fileno(STDOUT), "w") or croak "Cannot open STDOUT $! $?";
+
+    my $block           = '';
+    my ($indentSize, $indentAtBlockStart, $indentWithinBlock, $matchIndent);
+    my $matchesPattern;
+    my $blockStartRx = $options->{'block-start-regex'};
+    my $blockEndRx   = $options->{'block-end-regex'};
+    my $pattern      = $options->{'pattern'} || $blockStartRx;
+
+    @ARGV=@{$files};
+
+    my $line;
+
+    LINE: while(1) {
+        $matchesPattern = 0;
+
+        SEEK_BLOCK_START:
+        while ($line = <<>>) {
+            if ($line =~ $blockStartRx) {
+                $ioDebug->print("Match block start: $line\n") if $options->{debug};
+                ($indentSize, $indentAtBlockStart) = detect_indent($line);
+                $matchIndent = $indentSize;
+
+                if ($line =~ $pattern) {
+                    $matchesPattern = 1;
+                    $ioDebug->print("Pattern match! $line\n") if $options->{debug};
+                }
+
+                if ($options{'print-block-start'}) {
+                    $block .= $line;
+                }
+                last SEEK_BLOCK_START;
+            }
+        }
+        if (defined($line)) {
+            $line = <<>>;
+        }
+        # If either of last 2 calls to <<>> failed, end now
+        if (!defined($line)) {
+            last LINE;
+        }
+
+        # Replace our custom indent metacharacters with specific text
+        ($indentSize, $indentWithinBlock) = detect_indent($line);
+        $blockEndRx  = $options->{'block-end-regex'};
+        for($blockEndRx) {
+            s/\\I/$indentAtBlockStart/g;
+            s/\\i/$indentWithinBlock/g;
+        }
+        $blockEndRx = qr/$blockEndRx/;
+
+        $matchesPattern ||= $line =~ $pattern;
+        $ioDebug->print("Pattern match! $line\n") if $matchesPattern && $options->{debug};
+
+
+        SEEK_END_LINE:
+        while(defined($line)) {
+            $block .= $line;
+            $ioDebug->print("# $line") if $options->{debug};
+
+            if (!$matchesPattern && $line =~ $pattern) {
+                $ioDebug->print("Pattern match! $line\n") if $options->{debug};
+                $matchesPattern = 1;
+            }
+
+            # if ($options->{debug}) {
+            #     $ioDebug->print(qq{
+            #         indentSize: $indentSize
+            #         indentAtBlockStart: |$indentAtBlockStart|
+            #         indentWithinBlock: |$indentWithinBlock|
+            #     } =~ s/^\s+//r);
+            # }
+
+            if ($line =~ $blockEndRx) {
+                $ioDebug->print("# Endblock symbol found \n" . $line . "\n") if $options->{debug};
+                end_block($io, $block, $line, 'regex') if $matchesPattern;
+                $block = '';
+                last SEEK_END_LINE;
+            }
+
+            if (!$options->{'ignore-indent'} && $indentSize < $matchIndent) {
+                $ioDebug->print("# Indent not match\n" . $line . "\n") if $options->{debug};
+                end_block($io, $block, $line, 'indentSize') if $matchesPattern;
+                $block = '';
+                last SEEK_END_LINE;
+            }
+
+            $line = <<>>;
+        }
+
+        if (!defined($line)) {
+            last LINE;
+        }
+    }
+
+    end_block($io, $block, '', 'eof');
+}
+
+sub get_pattern {
+    my $pattern = $_[0] or do {
+        pod2usage(); #$ARGV[0];
+        exit(2);
+    };
+
+    if ($pattern !~ /[\^\$\(]/) {
+        $pattern = qq(.*$pattern.*);
+    }
+
+    if ($options{'ignore-case'}) {
+        $pattern = qr/$pattern/i;
+    } else {
+        $pattern = qr/$pattern/;
+    }
+
+    return $pattern;
 }
 
 sub main {
     parse_options();
-    my $pattern = get_pattern(\@ARGV);
-    shift @ARGV;
 
     if ($options{debug}) {
-        print "# Seek $pattern\n";
+        print "# Seek $options{pattern}\n";
         print "# Options: \n" . Dumper(\%options);
         print "# ARGV:\n" . Dumper(\@ARGV);
     }
 
-    my $mode = MODE_MATCH_PATTERN;
-    my $matchIndent = -1;
-    my $indent = 0;
-
-    my $block = '';
-    my $blockEndRx;
-    my $indentStr = '';
-    my $skipCount = 0;
-    my $startIndentStr;
-
-    LINE: while(<>) {
-        chomp;
-        my $line = $_;
-
-        ($indent, $indentStr) = detect_indent($line);
-
-        if ($mode == MODE_MATCH_PATTERN && $line =~ $pattern) {
-            $startIndentStr = $indentStr;
-            $skipCount      = 0;
-            $mode           = MODE_SEEK_BLOCK_END;
-            $matchIndent    = -1;
-
-            if ($options{'print-block-start'}) {
-                print $line . "\n";
-            }
-            next;
-        }
-
-        if ($mode == MODE_SEEK_BLOCK_END) {
-            while ($skipCount < $options{'block-head-lines'}) {
-                $skipCount++;
-                print "Skipped 1, $skipCount\n" if $options{debug};
-                next LINE;
-            }
-
-            print "# Indent count is $indent, |$indentStr| match string is |$startIndentStr|\n" if $options{debug};
-
-            if ($matchIndent < 0) {
-                $matchIndent = $indent;
-                $blockEndRx  = $options{'block-end-regex'};
-
-                for($blockEndRx) {
-                    s/__START_INDENT__/$startIndentStr/g;
-                    s/__INDENT__/$indentStr/g;
-                }
-
-                print '|' . $blockEndRx . "|\n" if $options{debug};
-                print "$line\n" if $options{debug};
-
-                $blockEndRx = qr/$blockEndRx/;
-
-            } elsif ($line =~ $blockEndRx) {
-                print "# Endblock symbol found \n" . $line . "\n" if $options{debug};
-                $mode  = MODE_MATCH_PATTERN;
-                end_block($block, $line, 'regex');
-                $block = '';
-                next LINE;
-            }
-
-            if (!$options{'ignore-indent'} && $indent < $matchIndent) {
-                print "# Indent not match\n" . $line . "\n" if $options{debug};
-                $mode = MODE_MATCH_PATTERN;
-                end_block($block, $line, 'indent');
-                $block = '';
-                next LINE;
-            }
-
-            $block .= $line . "\n";
-        }
-    }
-    end_block($block, '', 'eof');
+    blockgrep(\%options, \@ARGV);
 }
 
 
-main(\@ARGV);
+if (caller) {
+    use Exporter qw(import);
+    our @EXPORT_OK = qw/blockgrep/;
+} else {
+    __PACKAGE__->main(\@ARGV);
+}
 
 #print "# EOF\n";
 __END__
