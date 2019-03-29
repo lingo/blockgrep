@@ -320,8 +320,8 @@ Those marked with a [*] are defaults
   -h|--help                      Help on usage
   -i|--ignore-case               [*] Case-insensitive matching (*default)
   -s|--no-ignore-case            Case sensitive matching
-  -m|--print-block-start         [*] Show the line that matched block start
-  -I|--print-block-end           [*] Print the line that ended the block
+  -pstart|--print-block-start    [*] Show the line that matched block start
+  -pend|--print-block-end        [*] Print the line that ended the block
   -S|--block-start-regex REGEX   Supply a regex to match block starts
   -E|--block-end-regex REGEX     Supply a regex to match block endings
   -d|--ignore-indent             Ignore indentation and only look at block end regex
