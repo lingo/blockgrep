@@ -7,7 +7,7 @@ no warnings qw(experimental);
 use feature qw(:5.14);
 use strict;
 
-our $VERSION = '1.03';
+our $VERSION = '___VERSION___';
 
 use IO::Handle;
 use Data::Dumper;

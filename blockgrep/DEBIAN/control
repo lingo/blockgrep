@@ -1,5 +1,5 @@
 Package: blockgrep
-Version: 1.0.2
+Version: 0.1.3
 Section: custom
 Priority: optional
 Architecture: all
