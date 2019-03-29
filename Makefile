@@ -1,7 +1,6 @@
 VERSION := $(shell git describe --tags)
 
-
-blockgrep.deb: blockgrep/usr/local/bin/blockgrep blockgrep/usr/local/share/man/man1/blockgrep.1.gz blockgrep/DEBIAN/control
+blockgrep.deb: blockgrep/usr/local/bin/blockgrep blockgrep/usr/local/share/man/man1/blockgrep.1.gz blockgrep/DEBIAN/control src/blockgrep
 	cp src/blockgrep blockgrep/usr/local/bin/blockgrep
 	sed -ri "s/___VERSION___/${VERSION}/g" blockgrep/usr/local/bin/blockgrep
 	sed -ri "s/^(Version:).*/\1 ${VERSION}/" blockgrep/DEBIAN/control
